@@ -1,0 +1,73 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: munich
+spec:
+  finalizers:
+  - kubernetes
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ua-cloudpublisher
+  namespace: munich
+spec:
+  # Scaled to zero: UA Cloud Publisher is kept in the config as a dormant backup but not run. The AIO
+  # connector for OPC UA publishes station telemetry/metadata to the cloud instead. Set replicas back
+  # to 1 to re-enable UA Cloud Publisher (and stop the AIO connector to avoid duplicate ingestion).
+  replicas: 0
+  selector:
+    matchLabels:
+      app: ua-cloudpublisher
+  template:
+    metadata:
+      labels:
+        app: ua-cloudpublisher
+    spec:
+      nodeSelector:
+        "kubernetes.io/os": linux
+      containers:
+      - name: ua-cloudpublisher
+        image: ghcr.io/barnstee/ua-cloudpublisher:main
+        imagePullPolicy: Always
+        env:
+        - name: OPCUA_USERNAME
+          value: "myUsername"
+        - name: OPCUA_PASSWORD
+          value: "myPassword"
+        - name: PUBLISHER_USERNAME
+          value: "myUsername"
+        - name: PUBLISHER_PASSWORD
+          value: "myPassword"
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: "settings"
+          mountPath: "/app/settings"
+        - name: "pki"
+          mountPath: "/app/pki"
+        - name: "logs"
+          mountPath: "/app/logs"
+      volumes:
+        - name: "settings"
+          hostPath:
+            path: "/mnt/c/K3s/PublisherConfig/Munich"
+        - name: "pki"
+          hostPath:
+            path: "/mnt/c/K3s/PublisherConfig/Munich/PKI"
+        - name: "logs"
+          hostPath:
+            path: "/mnt/c/K3s/PublisherConfig/Munich/Logs"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ua-cloudpublisher
+  namespace: munich
+spec:
+  type: LoadBalancer
+  ports:
+  - targetPort: 8080
+    port: 8080
+  selector:
+    app: ua-cloudpublisher

@@ -1,0 +1,174 @@
+<?xml version="1.0"?>
+<rdf:RDF xmlns="http://www.trumpf.com/ontologies/visa-measurement#"
+     xml:base="http://www.trumpf.com/ontologies/visa-measurement"
+     xmlns:owl="http://www.w3.org/2002/07/owl#"
+     xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+     xmlns:xml="http://www.w3.org/XML/1998/namespace"
+     xmlns:xsd="http://www.w3.org/2001/XMLSchema#"
+     xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+     xmlns:bfo="http://purl.obolibrary.org/obo/BFO_"
+     xmlns:sosa="http://www.w3.org/ns/sosa/"
+     xmlns:ssn="http://www.w3.org/ns/ssn/">
+
+    <owl:Ontology rdf:about="http://www.trumpf.com/ontologies/visa-measurement">
+        <owl:imports rdf:resource="http://purl.obolibrary.org/obo/bfo.owl"/>
+        <owl:imports rdf:resource="http://www.w3.org/ns/ssn/"/>
+        <rdfs:comment xml:lang="en">An OWL ontology created for TRUMPF modeling VISA instrument interface classes, resource classes, and integrating SSN/SOSA sensor concepts grounded in the Basic Formal Ontology (BFO).</rdfs:comment>
+    </owl:Ontology>
+
+
+    <!-- 
+        ===================================================================
+        BFO Root Declarations (Upper-Level Anchors)
+        ===================================================================
+    -->
+
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/BFO_0000001">
+        <rdfs:label xml:lang="en">entity</rdfs:label>
+    </owl:Class>
+
+    <owl:Class rdf:about="http://purl.obolibrary.org/obo/BFO_0000040">
+        <rdfs:label xml:lang="en">material entity</rdfs:label>
+        <rdfs:subClassOf rdf:resource="http://purl.obolibrary.org/obo/BFO_0000001"/>
+    </owl:Class>
+
+
+    <!-- 
+        ===================================================================
+        SSN/SOSA Integration Classes
+        ===================================================================
+    -->
+
+    <owl:Class rdf:about="http://www.w3.org/ns/sosa/Sensor">
+        <rdfs:label xml:lang="en">Sensor</rdfs:label>
+        <rdfs:subClassOf rdf:resource="http://purl.obolibrary.org/obo/BFO_0000040"/>
+        <rdfs:comment xml:lang="en">A device, agent (including humans), or software (simulation) involved in or implementing a sensing process.</rdfs:comment>
+    </owl:Class>
+
+    <owl:Class rdf:about="http://www.w3.org/ns/sosa/Platform">
+        <rdfs:label xml:lang="en">Platform</rdfs:label>
+        <rdfs:subClassOf rdf:resource="http://purl.obolibrary.org/obo/BFO_0000040"/>
+        <rdfs:comment xml:lang="en">A fixture or structure that holds sensors, other platforms, etc.</rdfs:comment>
+    </owl:Class>
+
+    <owl:Class rdf:about="http://www.w3.org/ns/sosa/Procedure">
+        <rdfs:label xml:lang="en">Procedure</rdfs:label>
+        <rdfs:subClassOf rdf:resource="http://purl.obolibrary.org/obo/BFO_0000001"/>
+        <rdfs:comment xml:lang="en">A workflow, protocol, or algorithm describing how a sensing or measurement activity is accomplished.</rdfs:comment>
+    </owl:Class>
+
+
+    <!-- 
+        ===================================================================
+        TRUMPF VISA Domain Classes (Subclasses of BFO / SSN)
+        ===================================================================
+    -->
+
+    <owl:Class rdf:about="http://www.trumpf.com/ontologies/visa-measurement#TestInstrument">
+        <rdfs:label xml:lang="en">Test Instrument</rdfs:label>
+        <rdfs:subClassOf rdf:resource="http://www.w3.org/ns/sosa/Sensor"/>
+        <rdfs:comment xml:lang="en">A hardware measuring or test instrument capable of executing test and measurement procedures via programmatic interfaces.</rdfs:comment>
+    </owl:Class>
+
+
+    <!-- Interface and Device Classes Collection -->
+    <owl:Class rdf:about="http://www.trumpf.com/ontologies/visa-measurement#VISAInterfaceClass">
+        <rdfs:label xml:lang="en">VISA Interface Class</rdfs:label>
+        <rdfs:subClassOf rdf:resource="http://purl.obolibrary.org/obo/BFO_0000001"/>
+        <rdfs:comment xml:lang="en">Collection representing the protocol interface or device category token in VISA resource strings (e.g., inst, gpib, serial, usb).</rdfs:comment>
+    </owl:Class>
+
+    <owl:Class rdf:about="http://www.trumpf.com/ontologies/visa-measurement#VXI11InstrumentSession">
+        <rdfs:label xml:lang="en">VXI-11 Instrument Session (inst)</rdfs:label>
+        <rdfs:subClassOf rdf:resource="http://www.trumpf.com/ontologies/visa-measurement#VISAInterfaceClass"/>
+    </owl:Class>
+
+    <owl:Class rdf:about="http://www.trumpf.com/ontologies/visa-measurement#MemorySession">
+        <rdfs:label xml:lang="en">Memory Session (mem)</rdfs:label>
+        <rdfs:subClassOf rdf:resource="http://www.trumpf.com/ontologies/visa-measurement#VISAInterfaceClass"/>
+    </owl:Class>
+
+    <owl:Class rdf:about="http://www.trumpf.com/ontologies/visa-measurement#GPIBInstrumentSession">
+        <rdfs:label xml:lang="en">GPIB Instrument Session (gpib)</rdfs:label>
+        <rdfs:subClassOf rdf:resource="http://www.trumpf.com/ontologies/visa-measurement#VISAInterfaceClass"/>
+    </owl:Class>
+
+    <owl:Class rdf:about="http://www.trumpf.com/ontologies/visa-measurement#SerialSession">
+        <rdfs:label xml:lang="en">Serial Session (serial/ASRL)</rdfs:label>
+        <rdfs:subClassOf rdf:resource="http://www.trumpf.com/ontologies/visa-measurement#VISAInterfaceClass"/>
+    </owl:Class>
+
+    <owl:Class rdf:about="http://www.trumpf.com/ontologies/visa-measurement#USBSession">
+        <rdfs:label xml:lang="en">USB Session (usb)</rdfs:label>
+        <rdfs:subClassOf rdf:resource="http://www.trumpf.com/ontologies/visa-measurement#VISAInterfaceClass"/>
+    </owl:Class>
+
+    <owl:Class rdf:about="http://www.trumpf.com/ontologies/visa-measurement#SocketSession">
+        <rdfs:label xml:lang="en">Raw TCP/IP Socket Session (socket)</rdfs:label>
+        <rdfs:subClassOf rdf:resource="http://www.trumpf.com/ontologies/visa-measurement#VISAInterfaceClass"/>
+    </owl:Class>
+
+
+    <!-- Resource Classes Collection -->
+    <owl:Class rdf:about="http://www.trumpf.com/ontologies/visa-measurement#VISAResourceClass">
+        <rdfs:label xml:lang="en">VISA Resource Class</rdfs:label>
+        <rdfs:subClassOf rdf:resource="http://purl.obolibrary.org/obo/BFO_0000001"/>
+        <rdfs:comment xml:lang="en">Collection representing the terminal resource service model classes in VISA architecture (e.g., INSTR, MEMACC, INTFC).</rdfs:comment>
+    </owl:Class>
+
+    <owl:Class rdf:about="http://www.trumpf.com/ontologies/visa-measurement#InstrumentControlResource">
+        <rdfs:label xml:lang="en">Instrument Control Resource (INSTR)</rdfs:label>
+        <rdfs:subClassOf rdf:resource="http://www.trumpf.com/ontologies/visa-measurement#VISAResourceClass"/>
+        <rdfs:comment xml:lang="en">Grants message-based and register-based I/O services, status queries, device clearing, and triggering.</rdfs:comment>
+    </owl:Class>
+
+    <owl:Class rdf:about="http://www.trumpf.com/ontologies/visa-measurement#MemoryAccessResource">
+        <rdfs:label xml:lang="en">Memory Access Resource (MEMACC)</rdfs:label>
+        <rdfs:subClassOf rdf:resource="http://www.trumpf.com/ontologies/visa-measurement#VISAResourceClass"/>
+        <rdfs:comment xml:lang="en">Grants absolute memory-mapped register access across specialized buses like VXI or VME.</rdfs:comment>
+    </owl:Class>
+
+    <owl:Class rdf:about="http://www.trumpf.com/ontologies/visa-measurement#InterfaceResource">
+        <rdfs:label xml:lang="en">Interface Resource (INTFC)</rdfs:label>
+        <rdfs:subClassOf rdf:resource="http://www.trumpf.com/ontologies/visa-measurement#VISAResourceClass"/>
+        <rdfs:comment xml:lang="en">Interacts directly with the hardware interface board controller rather than an attached instrument.</rdfs:comment>
+    </owl:Class>
+
+    <owl:Class rdf:about="http://www.trumpf.com/ontologies/visa-measurement#BackplaneResource">
+        <rdfs:label xml:lang="en">Backplane Resource (BACKPLANE)</rdfs:label>
+        <rdfs:subClassOf rdf:resource="http://www.trumpf.com/ontologies/visa-measurement#VISAResourceClass"/>
+        <rdfs:comment xml:lang="en">Used to address system chassis backplanes in modular hardware like PXI or VXI systems.</rdfs:comment>
+    </owl:Class>
+
+    <owl:Class rdf:about="http://www.trumpf.com/ontologies/visa-measurement#SocketResource">
+        <rdfs:label xml:lang="en">Socket Resource (SOCKET)</rdfs:label>
+        <rdfs:subClassOf rdf:resource="http://www.trumpf.com/ontologies/visa-measurement#VISAResourceClass"/>
+        <rdfs:comment xml:lang="en">Governs raw TCP/IP port streaming.</rdfs:comment>
+    </owl:Class>
+
+
+    <!-- 
+        ===================================================================
+        Properties Linking VISA Concepts to SSN and BFO
+        ===================================================================
+    -->
+
+    <owl:ObjectProperty rdf:about="http://www.trumpf.com/ontologies/visa-measurement#hasInterfaceClass">
+        <rdfs:label xml:lang="en">has interface class</rdfs:label>
+        <rdfs:domain rdf:resource="http://www.trumpf.com/ontologies/visa-measurement#TestInstrument"/>
+        <rdfs:range rdf:resource="http://www.trumpf.com/ontologies/visa-measurement#VISAInterfaceClass"/>
+    </owl:ObjectProperty>
+
+    <owl:ObjectProperty rdf:about="http://www.trumpf.com/ontologies/visa-measurement#hasResourceClass">
+        <rdfs:label xml:lang="en">has resource class</rdfs:label>
+        <rdfs:domain rdf:resource="http://www.trumpf.com/ontologies/visa-measurement#TestInstrument"/>
+        <rdfs:range rdf:resource="http://www.trumpf.com/ontologies/visa-measurement#VISAResourceClass"/>
+    </owl:ObjectProperty>
+
+    <owl:DatatypeProperty rdf:about="http://www.trumpf.com/ontologies/visa-measurement#hasVisaResourceString">
+        <rdfs:label xml:lang="en">has visa resource string</rdfs:label>
+        <rdfs:domain rdf:resource="http://www.trumpf.com/ontologies/visa-measurement#TestInstrument"/>
+        <rdfs:range rdf:resource="http://www.w3.org/2001/XMLSchema#string"/>
+    </owl:DatatypeProperty>
+
+</rdf:RDF>

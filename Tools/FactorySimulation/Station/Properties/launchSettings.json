@@ -1,0 +1,18 @@
+{
+  "profiles": {
+    "Station": {
+      "commandName": "Project"
+    },
+    "Docker": {
+      "commandName": "Docker",
+      "environmentVariables": {
+        "StationType": "assembly",
+        "StationURI": "opc.tcp://assembly.munich/",
+        "PowerConsumption": "200",
+        "CycleTime": "6",
+        "OPCUA_USERNAME": "myUsername",
+        "OPCUA_PASSWORD": "myPassword"
+      }
+    }
+  }
+}

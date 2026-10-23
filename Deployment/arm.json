@@ -1,0 +1,1308 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "adminUsername": {
+      "type": "string",
+      "minLength": 2,
+      "metadata": {
+        "description": "Username for the Virtual Machine."
+      }
+    },
+    "adminPassword": {
+      "type": "secureString",
+      "minLength": 12,
+      "metadata": {
+        "description": "Password for the Virtual Machine."
+      }
+    },
+    "deployDatabricks": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Deploy Azure Databricks as a second analytics option next to Azure Data Explorer. When enabled, an Azure Databricks workspace is created and automatically configured with the OPC UA Delta tables, Event Hubs ingestion and a sample dashboard."
+      }
+    },
+    "deployFabricCapacity": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Provision a Microsoft Fabric F2 capacity as part of the main deployment. Enable this if you plan to deploy Microsoft Fabric after the main deployment. IMPORTANT: this requires pre-existing Microsoft Fabric capacity quota in the target region. This is a subscription-level quota you must request/enable in the Azure portal before setting this to true."
+      }
+    },
+    "customLocationsOid": {
+      "type": "string",
+      "minLength": 36,
+      "metadata": {
+        "description": "Object ID of the custom-locations Microsoft Entra application. Obtain it by running az ad sp show --id bc313c14-388c-4e7d-a58e-70017303ee3b --query id -o tsv from the Azure CLI."
+      }
+    }
+  },
+  "variables": {
+    "resourcesName": "[resourceGroup().name]",
+    "addressPrefix": "10.0.0.0/16",
+    "subnetPrefix": "10.0.0.0/24",
+    "subnetPrefix2": "10.0.0.0/23",
+    "keyVaultSecretsUserId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/', variables('azureRbacAzurekeyVaultSecretsUser'))]",
+    "keyVaultSecretsOfficerId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/', variables('azureRbacKeyVaultSecretsOfficer'))]",
+    "keyVaultReaderId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/', variables('azureRbacKeyVaultReader'))]",
+    "authRuleResourceId": "[resourceId('Microsoft.EventHub/namespaces/authorizationRules', concat(variables('resourcesName'), '-EventHubs'), 'RootManageSharedAccessKey')]",
+    "azureRbacContributor": "b24988ac-6180-42a0-ab88-20f7382dd24c",
+    "azureRbacAzureEventHubsDataOwner": "f526a384-b230-433a-b45c-95f59c4a2dec",
+    "azureRbacAzurekeyVaultSecretsUser": "4633458b-17de-408a-b874-0445c86b69e6",
+    "azureRbacKeyVaultSecretsOfficer": "b86a8fe4-44ce-4948-aee5-eccb2c155cd7",
+    "azureRbacKeyVaultReader": "21090545-7ca7-4776-b22c-e363652d74d2",
+    "adxClusterName": "[toLower(take(concat(replace(variables('resourcesName'), '-', ''), 'adx'), 22))]",
+    "adxDBName": "[concat(variables('resourcesName'), '-DB')]",
+    "keyVaultName": "[toLower(take(concat(replace(variables('resourcesName'), '-', ''), 'kv'), 24))]",
+    "uaCloudLibContainerAppName": "[take(concat(variables('resourcesName'), '-ua-cloudlib'), 32)]",
+    "uaCloudLibPostgresName": "[toLower(concat(variables('resourcesName'), '-uacloudlib-pg'))]",
+    "uaCloudLibDatabaseName": "uacloudlib",
+    "fabricCapacityName": "[toLower(take(concat(replace(variables('resourcesName'), '-', ''), 'fabric'), 63))]",
+    "eventHubsNamespaceName": "[concat(variables('resourcesName'), '-EventHubs')]",
+    "databricksWorkspaceName": "[concat(variables('resourcesName'), '-Databricks')]",
+    "databricksManagedResourceGroupId": "[concat(subscription().id, '/resourceGroups/', variables('resourcesName'), '-Databricks-managed')]",
+    "databricksSetupScriptUri": "[uri('https://raw.githubusercontent.com/digitaltwinconsortium/ManufacturingOntologies/main/Deployment/', 'SetupDatabricks.sh')]",
+    "databricksNotebookUri": "https://raw.githubusercontent.com/digitaltwinconsortium/ManufacturingOntologies/main/Tools/DatabricksQueries/opcua_setup.py",
+    "databricksDashboardUri": "https://raw.githubusercontent.com/digitaltwinconsortium/ManufacturingOntologies/main/Tools/DatabricksQueries/dashboard-ontologies.lvdash.json",
+    "contributorRoleId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/', variables('azureRbacContributor'))]",
+    "i3xContainerAppName": "[concat(variables('resourcesName'), '-i3x4kusto')]",
+    "plantCopilotContainerAppName": "[concat(variables('resourcesName'), '-plantcopilot')]",
+    "azureRbacAzureEventHubsDataSender": "2b629674-e913-4c01-ae53-ef4638d8f975",
+    "azureRbacAzureEventHubsDataReceiver": "a638d3c7-ab3a-418d-83e6-5f17a39d4fde",
+    "aioStorageAccountName": "[toLower(take(concat(replace(variables('resourcesName'), '-', ''), 'aiostorage'), 24))]",
+    "aioSchemaRegistryName": "[toLower(concat(variables('resourcesName'), '-schemaregistry'))]",
+    "aioSchemaRegistryNamespace": "[toLower(concat(replace(variables('resourcesName'), '-', ''), 'aiosr'))]",
+    "aioSetupScriptUri": "[uri('https://raw.githubusercontent.com/digitaltwinconsortium/ManufacturingOntologies/main/Deployment/', 'SetupAzureIoTOperations.sh')]",
+    "eventHubsDataSenderRoleId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/', variables('azureRbacAzureEventHubsDataSender'))]",
+    "eventHubsDataReceiverRoleId": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Authorization/roleDefinitions/', variables('azureRbacAzureEventHubsDataReceiver'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.App/managedEnvironments",
+      "apiVersion": "2024-03-01",
+      "name": "[concat(variables('resourcesName'), '-AppEnvironment')]",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "appLogsConfiguration": {},
+        "workloadProfiles": [
+         {
+           "workloadProfileType": "Consumption",
+           "name": "Consumption"
+         }
+        ],
+        "vnetConfiguration": {
+          "infrastructureSubnetId": "[resourceId('Microsoft.Network/virtualNetworks/subnets', concat(variables('resourcesName'), '-Network-CA'), concat(variables('resourcesName'), '-Subnet-CA'))]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks', concat(variables('resourcesName'), '-Network-CA'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults",
+      "apiVersion": "2024-12-01-preview",
+      "name": "[variables('keyVaultName')]",
+      "location": "[resourceGroup().location]",
+      "tags": {},
+      "properties": {
+        "tenantId": "[subscription().tenantId]",
+        "networkAcls": {
+          "bypass": "AzureServices",
+          "defaultAction": "Deny",
+          "ipRules": [],
+          "virtualNetworkRules": [
+            {
+              "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', concat(variables('resourcesName'), '-Network-CA'), concat(variables('resourcesName'), '-Subnet-CA'))]"
+            },
+            {
+              "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', concat(variables('resourcesName'), '-Network'), concat(variables('resourcesName'), '-Subnet'))]"
+            }
+          ]
+        },
+        "accessPolicies": [],
+        "enabledForDeployment": false,
+        "enabledForDiskEncryption": false,
+        "enabledForTemplateDeployment": false,
+        "enableSoftDelete": true,
+        "softDeleteRetentionInDays": 90,
+        "enableRbacAuthorization": true,
+        "enablePurgeProtection": true,
+        "publicNetworkAccess": "Enabled",
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks', concat(variables('resourcesName'), '-Network-CA'))]",
+        "[resourceId('Microsoft.Network/virtualNetworks', concat(variables('resourcesName'), '-Network'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2021-04-01-preview",
+      "name": "[format('{0}/{1}', variables('keyVaultName'), 'adminpassword')]",
+      "properties": {
+        "value": "[parameters('adminPassword')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2021-04-01-preview",
+      "name": "[format('{0}/{1}', variables('keyVaultName'), 'brokerpassword')]",
+      "properties": {
+        "value": "[listkeys(variables('authRuleResourceId'), '2015-08-01').primaryConnectionString]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2021-04-01-preview",
+      "name": "[format('{0}/{1}', variables('keyVaultName'), 'servicepassword')]",
+      "properties": {
+        "value": "[parameters('adminPassword')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers",
+      "apiVersion": "2024-08-01",
+      "name": "[variables('uaCloudLibPostgresName')]",
+      "location": "[resourceGroup().location]",
+      "sku": {
+        "name": "Standard_B1ms",
+        "tier": "Burstable"
+      },
+      "properties": {
+        "administratorLogin": "[parameters('adminUsername')]",
+        "administratorLoginPassword": "[parameters('adminPassword')]",
+        "version": "16",
+        "storage": {
+          "storageSizeGB": 32,
+          "autoGrow": "Disabled"
+        },
+        "backup": {
+          "backupRetentionDays": 7,
+          "geoRedundantBackup": "Disabled"
+        },
+        "highAvailability": {
+          "mode": "Disabled"
+        },
+        "network": {
+          "publicNetworkAccess": "Enabled"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers/databases",
+      "apiVersion": "2024-08-01",
+      "name": "[format('{0}/{1}', variables('uaCloudLibPostgresName'), variables('uaCloudLibDatabaseName'))]",
+      "properties": {
+        "charset": "UTF8",
+        "collation": "en_US.utf8"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('uaCloudLibPostgresName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers/firewallRules",
+      "apiVersion": "2024-08-01",
+      "name": "[format('{0}/{1}', variables('uaCloudLibPostgresName'), 'AllowAllAzureIps')]",
+      "properties": {
+        "startIpAddress": "0.0.0.0",
+        "endIpAddress": "0.0.0.0"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('uaCloudLibPostgresName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2024-03-01",
+      "name": "[variables('uaCloudLibContainerAppName')]",
+      "location": "[resourceGroup().location]",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity'))]": {}
+        }
+      },
+      "properties": {
+        "workloadProfileName": "Consumption",
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', concat(variables('resourcesName'), '-AppEnvironment'))]",
+        "configuration": {
+          "secrets": [
+            {
+              "name": "postgrespassword",
+              "value": "[parameters('adminPassword')]"
+            },
+            {
+              "name": "cloudlibservicepassword",
+              "value": "[parameters('adminPassword')]"
+            }
+          ],
+          "ingress": {
+            "external": true,
+            "transport": "Auto",
+            "targetPort": 8080,
+            "allowInsecure": false,
+            "traffic": [
+              {
+                "latestRevision": true,
+                "weight": 100
+              }
+            ]
+          }
+        },
+        "template": {
+          "revisionSuffix": "firstrevision",
+          "containers": [
+            {
+              "name": "ua-cloudlibrary",
+              "image": "ghcr.io/opcfoundation/ua-cloudlibrary:latest",
+              "env": [
+                {
+                  "name": "ASPNETCORE_URLS",
+                  "value": "http://+:8080"
+                },
+                {
+                  "name": "PostgreSQLEndpoint",
+                  "value": "[reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('uaCloudLibPostgresName')), '2024-08-01').fullyQualifiedDomainName]"
+                },
+                {
+                  "name": "PostgreSQLUsername",
+                  "value": "[parameters('adminUsername')]"
+                },
+                {
+                  "name": "PostgreSQLPassword",
+                  "secretRef": "postgrespassword"
+                },
+                {
+                  "name": "ServicePassword",
+                  "secretRef": "cloudlibservicepassword"
+                }
+              ],
+              "resources": {
+                "cpu": "1",
+                "memory": "2Gi"
+              }
+            }
+          ],
+          "scale": {
+            "minReplicas": "1",
+            "maxReplicas": "1"
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.App/managedEnvironments', concat(variables('resourcesName'), '-AppEnvironment'))]",
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers/databases', variables('uaCloudLibPostgresName'), variables('uaCloudLibDatabaseName'))]",
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers/firewallRules', variables('uaCloudLibPostgresName'), 'AllowAllAzureIps')]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2024-03-01",
+      "name": "[concat(variables('resourcesName'), '-ua-dataprocessor')]",
+      "location": "[resourceGroup().location]",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity'))]": {}
+        }
+      },
+      "properties": {
+        "workloadProfileName": "Consumption",
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', concat(variables('resourcesName'), '-AppEnvironment'))]",
+        "configuration": {
+          "secrets": [
+            {
+              "name": "cloudlibpassword",
+              "value": "[parameters('adminPassword')]"
+            }
+          ]
+        },
+        "template": {
+          "revisionSuffix": "firstrevision",
+          "containers": [
+            {
+              "name": "ua-dataprocessor",
+              "image": "ghcr.io/opcfoundation/ua-dataprocessor:main",
+              "env": [
+                {
+                  "name": "UA_CLOUD_LIBRARY_URL",
+                  "value": "[concat('https://', reference(resourceId('Microsoft.App/containerApps', variables('uaCloudLibContainerAppName')), '2024-03-01').configuration.ingress.fqdn)]"
+                },
+                {
+                  "name": "UA_CLOUD_LIBRARY_USERNAME",
+                  "value": "admin"
+                },
+                {
+                  "name": "UA_CLOUD_LIBRARY_PASSWORD",
+                  "secretRef": "cloudlibpassword"
+                },
+                {
+                  "name": "ADX_HOST",
+                  "value": "[reference(resourceId('Microsoft.Kusto/clusters', variables('adxClusterName')), '2022-02-01').uri]"
+                },
+                {
+                  "name": "ADX_DB",
+                  "value": "ontologies"
+                },
+                {
+                  "name": "ADX_APPLICATION_ID",
+                  "value": "[reference(concat(variables('resourcesName'), '-Identity')).clientId]"
+                },
+                {
+                  "name": "ADX_TENANT_ID",
+                  "value": "[subscription().tenantId]"
+                },
+                {
+                  "name": "WATTTIME_USER",
+                  "value": ""
+                },
+                {
+                  "name": "WATTTIME_PASSWORD",
+                  "value": ""
+                }
+              ],
+              "resources": {
+                "cpu": "2",
+                "memory": "4Gi"
+              }
+            }
+          ],
+          "scale": {
+            "minReplicas": "1",
+            "maxReplicas": "1"
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.App/managedEnvironments', concat(variables('resourcesName'), '-AppEnvironment'))]",
+        "[resourceId('Microsoft.App/containerApps', variables('uaCloudLibContainerAppName'))]",
+        "[resourceId('Microsoft.Kusto/clusters/databases/scripts', variables('adxClusterName'), 'ontologies', 'OPCUA-parsing-script')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Network/publicIPAddresses",
+      "apiVersion": "2020-11-01",
+      "name": "[concat(variables('resourcesName'), '-IPAddress')]",
+      "location": "[resourceGroup().location]",
+      "sku": {
+        "name": "Standard"
+      },
+      "properties": {
+        "publicIPAllocationMethod": "Static",
+        "dnsSettings": {
+          "domainNameLabel": "[concat(variables('resourcesName'), 'domain')]"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "apiVersion": "2020-11-01",
+      "name": "[concat(variables('resourcesName'), '-NSG')]",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "default-allow-22",
+            "properties": {
+              "priority": 1000,
+              "access": "Allow",
+              "direction": "Inbound",
+              "destinationPortRange": "22",
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "*"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Network/virtualNetworks",
+      "apiVersion": "2020-11-01",
+      "name": "[concat(variables('resourcesName'), '-Network')]",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "[variables('addressPrefix')]"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "[concat(variables('resourcesName'), '-Subnet')]",
+            "properties": {
+              "addressPrefix": "[variables('subnetPrefix')]",
+              "serviceEndpoints": [
+                {
+                  "service": "Microsoft.KeyVault",
+                  "locations": [
+                    "*"
+                  ]
+                }
+              ],
+              "networkSecurityGroup": {
+                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', concat(variables('resourcesName'), '-NSG'))]"
+              }
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkSecurityGroups', concat(variables('resourcesName'), '-NSG'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Network/virtualNetworks",
+      "apiVersion": "2020-11-01",
+      "name": "[concat(variables('resourcesName'), '-Network-CA')]",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "[variables('addressPrefix')]"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "[concat(variables('resourcesName'), '-Subnet-CA')]",
+            "properties": {
+              "addressPrefix": "[variables('subnetPrefix2')]",
+              "serviceEndpoints": [
+                {
+                  "service": "Microsoft.KeyVault",
+                  "locations": [
+                    "*"
+                  ]
+                }
+              ],
+              "delegations": [
+                {
+                  "name": "appServiceDelegation",
+                  "properties": {
+                    "serviceName": "Microsoft.App/environments"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Network/networkInterfaces",
+      "apiVersion": "2020-11-01",
+      "name": "[concat(variables('resourcesName'), '-IF')]",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "privateIPAllocationMethod": "Dynamic",
+              "publicIPAddress": {
+                "id": "[resourceId('Microsoft.Network/publicIPAddresses', concat(variables('resourcesName'), '-IPAddress'))]"
+              },
+              "subnet": {
+                "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', concat(variables('resourcesName'), '-Network'), concat(variables('resourcesName'), '-Subnet'))]"
+              }
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/publicIPAddresses', concat(variables('resourcesName'), '-IPAddress'))]",
+        "[resourceId('Microsoft.Network/virtualNetworks', concat(variables('resourcesName'), '-Network'))]"
+      ]
+    },
+    {
+      "apiVersion": "2025-04-01",
+      "type": "microsoft.compute/virtualmachines",
+      "name": "[concat(variables('resourcesName'), '-VM')]",
+      "location": "[resourceGroup().location]",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity'))]": {}
+        }
+      },
+      "properties": {
+        "hardwareProfile": {
+          "vmSize": "Standard_E4as_v6"
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "canonical",
+            "offer": "ubuntu-24_04-lts",
+            "sku": "server",
+            "version": "latest"
+          },
+          "osDisk": {
+            "osType": "Linux",
+            "createOption": "FromImage",
+            "caching": "ReadWrite",
+            "managedDisk": {
+              "storageAccountType": "StandardSSD_LRS"
+            },
+            "deleteOption": "Delete",
+            "diskSizeGB": 64
+          },
+          "dataDisks": []
+        },
+        "osProfile": {
+          "computerName": "[variables('resourcesName')]",
+          "adminUsername": "[parameters('adminUsername')]",
+          "adminPassword": "[parameters('adminPassword')]",
+          "linuxConfiguration": {
+            "disablePasswordAuthentication": false,
+            "provisionVMAgent": true,
+            "patchSettings": {
+              "patchMode": "ImageDefault",
+              "assessmentMode": "ImageDefault"
+            }
+          },
+          "secrets": [],
+          "allowExtensionOperations": true
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces', concat(variables('resourcesName'), '-IF'))]"
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkInterfaces', concat(variables('resourcesName'), '-IF'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines/extensions",
+      "name": "[concat(variables('resourcesName'), '-VM','/Bootstrap')]",
+      "apiVersion": "2022-11-01",
+      "location": "[resourceGroup().location]",
+      "dependsOn": [
+        "[concat('Microsoft.Compute/virtualMachines/', variables('resourcesName'), '-VM')]",
+        "[resourceId('Microsoft.EventHub/namespaces', variables('eventHubsNamespaceName'))]",
+        "[resourceId('Microsoft.Kusto/Clusters/Databases/DataConnections', variables('adxClusterName'), 'ontologies', 'EventHubDataConnection')]",
+        "[resourceId('Microsoft.Kusto/Clusters/Databases/DataConnections', variables('adxClusterName'), 'ontologies', 'EventHubMetadataConnection')]",
+        "[resourceId('Microsoft.EventHub/namespaces/eventhubs', variables('eventHubsNamespaceName'), 'data')]",
+        "[resourceId('Microsoft.EventHub/namespaces/eventhubs', variables('eventHubsNamespaceName'), 'metadata')]",
+        "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceGroup().id, resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity')), variables('eventHubsDataSenderRoleId')))]",
+        "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceGroup().id, resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity')), variables('contributorRoleId')))]",
+        "[resourceId('Microsoft.DeviceRegistry/schemaRegistries', variables('aioSchemaRegistryName'))]"
+      ],
+      "tags": {
+        "displayName": "Run Bootstrap (Linux)"
+      },
+      "properties": {
+        "publisher": "Microsoft.Azure.Extensions",
+        "type": "CustomScript",
+        "typeHandlerVersion": "2.1",
+        "autoUpgradeMinorVersion": true,
+        "settings": {
+          "fileUris": [
+            "[uri('https://raw.githubusercontent.com/digitaltwinconsortium/ManufacturingOntologies/main/Deployment/', 'Bootstrap.sh')]",
+            "[uri('https://raw.githubusercontent.com/digitaltwinconsortium/ManufacturingOntologies/main/Deployment/', 'SetupAzureIoTOperations.sh')]"
+          ]
+        },
+        "protectedSettings": {
+          "commandToExecute": "[concat('bash Bootstrap.sh ''', listkeys(variables('authRuleResourceId'), '2015-08-01').primaryConnectionString, ''' ''', resourceGroup().name, ''' ''', resourceGroup().location, ''' ''', variables('resourcesName'), ''' ''', reference(concat(variables('resourcesName'), '-Identity')).clientId, ''' ''', subscription().subscriptionId, ''' ''', parameters('customLocationsOid'), ''' ''', concat(variables('eventHubsNamespaceName'), '.servicebus.windows.net'), '''')]"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Kusto/clusters",
+      "apiVersion": "2023-05-02",
+      "name": "[variables('adxClusterName')]",
+      "sku": {
+        "name": "Standard_E2ads_v5",
+        "tier": "Standard",
+        "capacity": 2
+      },
+      "location": "[resourceGroup().location]",
+      "tags": {
+        "Created By": "GitHub quickstart template"
+      },
+      "properties": {
+        "trustedExternalTenants": [
+          {
+            "value": "*"
+          }
+        ],
+        "enableDiskEncryption": false,
+        "enableStreamingIngest": true,
+        "enablePurge": false,
+        "enableDoubleEncryption": false,
+        "engineType": "V3",
+        "languageExtensions": {
+          "value": [
+            {
+              "languageExtensionName": "PYTHON",
+              "languageExtensionImageName": "Python3_11_7"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Kusto/clusters/databases",
+      "apiVersion": "2021-01-01",
+      "name": "[format('{0}/{1}', variables('adxClusterName'), 'ontologies')]",
+      "location": "[resourceGroup().location]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deploymentScripts', concat(variables('resourcesName'), '-WaitForAdxCluster'))]"
+      ],
+      "properties": {
+        "softDeletePeriodInDays": 365,
+        "hotCachePeriodInDays": 31
+      },
+      "kind": "ReadWrite"
+    },
+    {
+      "type": "Microsoft.Kusto/Clusters/Databases/DataConnections",
+      "apiVersion": "2022-12-29",
+      "name": "[format('{0}/{1}/{2}', variables('adxClusterName'), 'ontologies','EventHubDataConnection')]",
+      "location": "[resourceGroup().location]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Kusto/clusters/databases/principalAssignments', variables('adxClusterName'), 'ontologies', guid(resourceId('Microsoft.Kusto/clusters/databases', split(format('{0}/{1}', variables('adxClusterName'), 'ontologies'), '/')[0], split(format('{0}/{1}', variables('adxClusterName'), 'ontologies'), '/')[1]), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity')), 'Admin'))]"
+      ],
+      "kind": "EventHub",
+      "properties": {
+        "eventHubResourceId": "[resourceId('Microsoft.EventHub/namespaces/eventhubs', concat(variables('resourcesName'), '-EventHubs'), 'data')]",
+        "consumerGroup": "adx",
+        "tableName": "opcua_raw",
+        "mappingRuleName": "opcua_mapping",
+        "dataFormat": "MULTIJSON",
+        "eventSystemProperties": [],
+        "compression": "None",
+        "databaseRouting": "Single"
+      }
+    },
+    {
+      "type": "Microsoft.Kusto/Clusters/Databases/DataConnections",
+      "apiVersion": "2022-12-29",
+      "name": "[format('{0}/{1}/{2}', variables('adxClusterName'), 'ontologies','EventHubMetadataConnection')]",
+      "location": "[resourceGroup().location]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Kusto/Clusters/Databases/DataConnections', variables('adxClusterName'), 'ontologies', 'EventHubDataConnection')]"
+      ],
+      "kind": "EventHub",
+      "properties": {
+        "eventHubResourceId": "[resourceId('Microsoft.EventHub/namespaces/eventhubs', concat(variables('resourcesName'), '-EventHubs'), 'metadata')]",
+        "consumerGroup": "adx",
+        "tableName": "opcua_metadata_raw",
+        "mappingRuleName": "opcua_metadata_mapping",
+        "dataFormat": "MULTIJSON",
+        "eventSystemProperties": [],
+        "compression": "None",
+        "databaseRouting": "Single"
+      }
+    },
+    {
+      "type": "Microsoft.Kusto/clusters/databases/scripts",
+      "apiVersion": "2022-12-29",
+      "name": "[format('{0}/{1}/{2}', variables('adxClusterName'), 'ontologies', 'OPCUA-parsing-script')]",
+      "properties": {
+        "scriptContent": "// Enable streaming ingestion for the database\n.alter database ontologies policy streamingingestion enable\n\n// Create a landing table for the raw OPC UA telemetry JSON body\n.create table opcua_raw(payload: dynamic)\n\n// Create mapping from JSON ingestion to the landing table\n.create-or-alter table opcua_raw ingestion json mapping 'opcua_mapping' '[{\"column\":\"payload\",\"path\":\"$\",\"datatype\":\"dynamic\"}]'\n\n// Create our final OPC UA telemetry table (one row per field, keyed by Subject + Name)\n.create table opcua_telemetry (Subject: string, Timestamp: datetime, Name: string, Value: dynamic)\n\n// Expand telemetry into one row per field. Everything (identity, timestamp and values) lives in the JSON body, so the union just branches on the body shape: an array of DataSet messages (publishers usually batch several writers into one message) and a single DataSet message. Both carry the DataSetWriterId and Timestamp inside the body. Azure IoT Operations appends a topic suffix (e.g. '/telemetry') to the DataSetWriterId it carries in the CloudEvent subject; strip any suffix after the first '/' so Subject matches the bare writer id used by the metadata table for the join.\n.create-or-alter function OPCUATelemetryExpand() { union (opcua_raw | where gettype(payload) == \"array\" | mv-expand record = payload | mv-apply field = todynamic(record[\"Payload\"]) on (extend key = tostring(bag_keys(field)[0]) | extend p = field[key] | project Name = key, Value = todynamic(p[\"Value\"])) | project Subject = tostring(split(tostring(record[\"DataSetWriterId\"]), \"/\")[0]), Timestamp = todatetime(record[\"Timestamp\"]), Name, Value), (opcua_raw | where gettype(payload) == \"dictionary\" | mv-apply field = todynamic(payload[\"Payload\"]) on (extend key = tostring(bag_keys(field)[0]) | extend p = field[key] | project Name = key, Value = todynamic(p[\"Value\"])) | project Subject = tostring(split(tostring(payload[\"DataSetWriterId\"]), \"/\")[0]), Timestamp = todatetime(payload[\"Timestamp\"]), Name, Value) | project Subject, Timestamp, Name, Value }\n\n// Apply the telemetry expansion function to the OPC UA raw table\n.alter table opcua_telemetry policy update @'[{\"Source\": \"opcua_raw\", \"Query\": \"OPCUATelemetryExpand()\", \"IsEnabled\": \"True\"}]'\n\n// Create a landing table for the raw OPC UA metadata JSON body\n.create table opcua_metadata_raw(payload: dynamic)\n\n// Create mapping from JSON ingestion to the metadata landing table\n.create-or-alter table opcua_metadata_raw ingestion json mapping 'opcua_metadata_mapping' '[{\"column\":\"payload\",\"path\":\"$\",\"datatype\":\"dynamic\"}]'\n\n// Create our final OPC UA metadata table (one row per field; the ISA-95 hierarchy used by the OEE functions is parsed from DataSetName)\n.create table opcua_metadata(Subject: string, Timestamp: datetime, DataSetName: string, MajorVersion: long, MinorVersion: long, Name: string, BuiltInType: int, DataType: string, ValueRank: int, Type: string, DisplayName: string, Workcell: string, Line: string, Area: string, Site: string, Enterprise: string, NamespaceUri: string, NodeId: string)\n\n// Expand the metadata message. The body is the DataSetMetaData wrapped with its DataSetWriterId and Timestamp; mv-expand over Fields produces one row per field, keyed by Subject + Name. Subject is normalized (strip any suffix after the first '/'). The ISA-95 hierarchy is parsed from DataSetName, supporting BOTH producers: UA Cloud Publisher emits the OPC UA ApplicationUri form 'Workcell.Line.Area.Site.Enterprise;nsu=<uri>;<NodeId>' (detected by ';nsu='), while Azure IoT Operations emits the asset name '<station>-<location>-asset_telemetry'; isPublisher selects the correct parse per field.\n.create-or-alter function OPCUAMetaDataExpand() { opcua_metadata_raw | extend meta = todynamic(payload[\"MetaData\"]) | extend DataSetName = tostring(meta[\"Name\"]) | extend isPublisher = DataSetName contains \";nsu=\" | extend aioParts = split(replace_string(replace_string(DataSetName, \"_telemetry\", \"\"), \"-asset\", \"\"), \"-\") | extend Workcell = iff(isPublisher, extract(@\"([^:.]+)\\.[^.]+\\.[^.]+\\.[^.]+\\.[^;]+;nsu=\", 1, DataSetName), tostring(aioParts[0])), Line = iff(isPublisher, extract(@\"[^:.]+\\.([^.]+)\\.[^.]+\\.[^.]+\\.[^;]+;nsu=\", 1, DataSetName), \"\"), Area = iff(isPublisher, extract(@\"[^:.]+\\.[^.]+\\.([^.]+)\\.[^.]+\\.[^;]+;nsu=\", 1, DataSetName), \"\"), Site = iff(isPublisher, extract(@\"[^:.]+\\.[^.]+\\.[^.]+\\.([^.]+)\\.[^;]+;nsu=\", 1, DataSetName), tostring(aioParts[1])), Enterprise = iff(isPublisher, extract(@\"[^:.]+\\.[^.]+\\.[^.]+\\.[^.]+\\.([^;]+);nsu=\", 1, DataSetName), \"\"), NamespaceUri = iff(isPublisher, extract(@\";nsu=([^;]+);\", 1, DataSetName), \"\"), NodeId = iff(isPublisher, extract(@\";nsu=[^;]+;(.+)$\", 1, DataSetName), \"\") | extend MajorVersion = tolong(meta[\"ConfigurationVersion\"][\"MajorVersion\"]), MinorVersion = tolong(meta[\"ConfigurationVersion\"][\"MinorVersion\"]) | mv-expand Field = meta[\"Fields\"] | project Subject = tostring(split(tostring(payload[\"DataSetWriterId\"]), \"/\")[0]), Timestamp = todatetime(payload[\"Timestamp\"]), DataSetName, MajorVersion, MinorVersion, Name = tostring(Field[\"Name\"]), BuiltInType = toint(Field[\"BuiltInType\"]), DataType = tostring(Field[\"DataType\"]), ValueRank = toint(Field[\"ValueRank\"]), Type = tostring(Field[\"Description\"]), DisplayName = tostring(Field[\"Name\"]), Workcell, Line, Area, Site, Enterprise, NamespaceUri, NodeId }\n\n// Apply the raw metadata expansion function to the metadata landing table\n.alter table opcua_metadata policy update @'[{\"Source\": \"opcua_metadata_raw\", \"Query\": \"OPCUAMetaDataExpand()\", \"IsEnabled\": \"True\"}]'\n\n// Create a materialized view for the last known value (LKV) of our metadata\n.create materialized-view opcua_metadata_lkv on table opcua_metadata { opcua_metadata | summarize arg_max(Timestamp, *) by Subject, Name }\n\n",
+        "continueOnErrors": false
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Kusto/clusters/databases', variables('adxClusterName'), 'ontologies')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Kusto/clusters/databases/scripts",
+      "apiVersion": "2022-12-29",
+      "name": "[format('{0}/{1}/{2}', variables('adxClusterName'), 'ontologies', 'OEE-calculation-script')]",
+      "properties": {
+        "scriptContent": ".create-or-alter function CalculateOEEForStation(stationName:string,location:string,idealCycleTime:int,shiftStartTime:datetime,shiftEndTime:datetime) {\n// calculation from https://www.oee.com/calculating-oee/\nlet idealRunningTime = (shiftEndTime - shiftStartTime) / time(1ms); // [ms]\nlet numProdEnd = toscalar(\nopcua_metadata_lkv\n| where DataSetName contains stationName\n| where DataSetName contains location\n| join kind=inner (opcua_telemetry\n| where Name == \"NumberOfManufacturedProducts\"\n| where Timestamp > shiftStartTime and Timestamp < shiftEndTime\n) on Subject\n| extend numProd = toint(Value)\n| summarize max(numProd));\nlet numProdStart = toscalar(\nopcua_metadata_lkv\n| where DataSetName contains stationName\n| where DataSetName contains location\n| join kind=inner (opcua_telemetry\n| where Name == \"NumberOfManufacturedProducts\"\n| where Timestamp > shiftStartTime and Timestamp < shiftEndTime\n) on Subject\n| extend numProd = toint(Value)\n| summarize min(numProd));\nlet numScrapEnd = toscalar(\nopcua_metadata_lkv\n| where DataSetName contains stationName\n| where DataSetName contains location\n| join kind=inner (opcua_telemetry\n| where Name == \"NumberOfDiscardedProducts\"\n| where Timestamp > shiftStartTime and Timestamp < shiftEndTime\n) on Subject\n| extend numDisc = toint(Value)\n| summarize max(numDisc));\nlet numScrapStart = toscalar(\nopcua_metadata_lkv\n| where DataSetName contains stationName\n| where DataSetName contains location\n| join kind=inner (opcua_telemetry\n| where Name == \"NumberOfDiscardedProducts\"\n| where Timestamp > shiftStartTime and Timestamp < shiftEndTime\n) on Subject\n| extend numDisc = toint(Value)\n| summarize min(numDisc));\nlet numProdShift = numProdEnd - numProdStart;\nlet numScrapShift = numScrapEnd - numScrapStart;\nlet actualCycleTime = toscalar(\nopcua_metadata_lkv\n| where DataSetName contains stationName\n| where DataSetName contains location\n| join kind=inner (opcua_telemetry\n| where Name == \"ActualCycleTime\"\n| where Timestamp > shiftStartTime and Timestamp < shiftEndTime\n) on Subject\n| extend cycleTime = toint(Value)\n| summarize avg(cycleTime));\nlet faultyTimeShift = toscalar(\nopcua_metadata_lkv\n| where DataSetName contains stationName\n| where DataSetName contains location\n| join kind=inner (opcua_telemetry\n| where Name == \"FaultyTime\"\n| where Timestamp > shiftStartTime and Timestamp < shiftEndTime\n) on Subject\n| extend faultyTime = toint(Value)\n| summarize sum(faultyTime));\nlet availability = todouble(idealRunningTime - faultyTimeShift) / todouble(idealRunningTime);\nlet performance = todouble(idealCycleTime) * todouble(numProdShift + numScrapShift) / todouble(idealRunningTime - faultyTimeShift);\nlet quality = todouble(numProdShift) / todouble(numProdShift + numScrapShift);\nlet oee = availability * performance * quality;\ntoscalar(oee)\n}\n\n.create-or-alter function CalculateOEEForLine(location:string,idealCycleTime:int,shiftStartTime:datetime,shiftEndTime:datetime) {\nlet stations = opcua_metadata_lkv\n| where Site == location\n| where Workcell !in (\"publisher\", \"mes\", \"commander\")\n| summarize by Workcell\n| project station = tostring(Workcell);\nlet oeeForStations = stations\n| partition hint.strategy=legacy by station ( extend oee = toscalar(CalculateOEEForStation(station, location, idealCycleTime, shiftStartTime, shiftEndTime)) )\n| summarize min(oee);\ntoscalar(oeeForStations)\n}\n\n.create-or-alter function ShiftBreak(startTime:datetime,endTime:datetime,bandValue:real,tzOffset:timespan) { print Steps = range(startTime, endTime, 1m) | mv-expand Timestamp1 = Steps to typeof(datetime) | extend localHourOfDay = hourofday(Timestamp1 + tzOffset) | where localHourOfDay == 14 or localHourOfDay == 6 | extend Break = bandValue | project Timestamp1, Break }\n\n",
+        "continueOnErrors": false
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Kusto/clusters/databases/scripts', variables('adxClusterName'), 'ontologies', 'OPCUA-parsing-script')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deploymentScripts",
+      "apiVersion": "2020-10-01",
+      "name": "[concat(variables('resourcesName'), '-WaitForAdxCluster')]",
+      "location": "[resourceGroup().location]",
+      "kind": "AzureCLI",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity'))]": {}
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Kusto/clusters', variables('adxClusterName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity'))]"
+      ],
+      "properties": {
+        "azCliVersion": "2.61.0",
+        "timeout": "PT30M",
+        "retentionInterval": "P1D",
+        "cleanupPreference": "OnSuccess",
+        "environmentVariables": [
+          {
+            "name": "ADX_CLUSTER_NAME",
+            "value": "[variables('adxClusterName')]"
+          },
+          {
+            "name": "RESOURCE_GROUP",
+            "value": "[resourceGroup().name]"
+          },
+          {
+            "name": "SUBSCRIPTION_ID",
+            "value": "[subscription().subscriptionId]"
+          }
+        ],
+        "scriptContent": "set -e; echo \"Waiting for ADX cluster ${ADX_CLUSTER_NAME} to reach a terminal provisioning state...\"; az kusto cluster wait --created --name \"${ADX_CLUSTER_NAME}\" --resource-group \"${RESOURCE_GROUP}\" --subscription \"${SUBSCRIPTION_ID}\" --interval 15 --timeout 1500; echo \"ADX cluster ${ADX_CLUSTER_NAME} provisioning state: $(az kusto cluster show --name \"${ADX_CLUSTER_NAME}\" --resource-group \"${RESOURCE_GROUP}\" --subscription \"${SUBSCRIPTION_ID}\" --query provisioningState -o tsv)\""
+      }
+    },
+    {
+      "type": "Microsoft.EventHub/namespaces",
+      "apiVersion": "2024-01-01",
+      "name": "[variables('eventHubsNamespaceName')]",
+      "location": "[resourceGroup().location]",
+      "sku": {
+        "name": "Standard",
+        "tier": "Standard",
+        "capacity": 1
+      },
+      "properties": {
+        "isAutoInflateEnabled": true,
+        "maximumThroughputUnits": 16,
+        "minimumTlsVersion": "1.2"
+      }
+    },
+    {
+      "type": "Microsoft.EventHub/namespaces/eventhubs",
+      "apiVersion": "2021-11-01",
+      "name": "[concat(variables('resourcesName'), '-EventHubs', '/commander.command')]",
+      "properties": {
+        "messageRetentionInDays": 1,
+        "partitionCount": 1
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces', concat(variables('resourcesName'), '-EventHubs'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.EventHub/namespaces/eventhubs",
+      "apiVersion": "2021-11-01",
+      "name": "[concat(variables('resourcesName'), '-EventHubs', '/commander.response')]",
+      "properties": {
+        "messageRetentionInDays": 1,
+        "partitionCount": 1
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces', concat(variables('resourcesName'), '-EventHubs'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.EventHub/namespaces/eventhubs",
+      "apiVersion": "2021-11-01",
+      "name": "[concat(variables('resourcesName'), '-EventHubs', '/data')]",
+      "properties": {
+        "messageRetentionInDays": 1,
+        "partitionCount": 1
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces', concat(variables('resourcesName'), '-EventHubs'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.EventHub/namespaces/eventhubs",
+      "apiVersion": "2021-11-01",
+      "name": "[concat(variables('resourcesName'), '-EventHubs', '/metadata')]",
+      "properties": {
+        "messageRetentionInDays": 1,
+        "partitionCount": 1
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces', concat(variables('resourcesName'), '-EventHubs'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.EventHub/namespaces/eventhubs/consumergroups",
+      "apiVersion": "2021-11-01",
+      "name": "[format('{0}/{1}/{2}', concat(variables('resourcesName'), '-EventHubs'), 'data', 'adx')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces/eventhubs', concat(variables('resourcesName'), '-EventHubs'), 'data')]"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "Microsoft.EventHub/namespaces/eventhubs/consumergroups",
+      "apiVersion": "2021-11-01",
+      "name": "[format('{0}/{1}/{2}', concat(variables('resourcesName'), '-EventHubs'), 'metadata', 'adx')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces/eventhubs', concat(variables('resourcesName'), '-EventHubs'), 'metadata')]"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2020-10-01-preview",
+      "name": "[guid(resourceGroup().id, resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity')), variables('eventHubsDataSenderRoleId'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces', variables('eventHubsNamespaceName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity'))]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[variables('eventHubsDataSenderRoleId')]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity')), '2018-11-30').principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2020-10-01-preview",
+      "name": "[guid(resourceGroup().id, resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity')), variables('eventHubsDataReceiverRoleId'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces', variables('eventHubsNamespaceName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity'))]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[variables('eventHubsDataReceiverRoleId')]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity')), '2018-11-30').principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2023-05-01",
+      "name": "[variables('aioStorageAccountName')]",
+      "location": "[resourceGroup().location]",
+      "sku": {
+        "name": "Standard_LRS"
+      },
+      "kind": "StorageV2",
+      "properties": {
+        "isHnsEnabled": true,
+        "allowBlobPublicAccess": false,
+        "minimumTlsVersion": "TLS1_2",
+        "supportsHttpsTrafficOnly": true
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+      "apiVersion": "2023-05-01",
+      "name": "[concat(variables('aioStorageAccountName'), '/default/schemas')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('aioStorageAccountName'))]"
+      ],
+      "properties": {
+        "publicAccess": "None"
+      }
+    },
+    {
+      "type": "Microsoft.DeviceRegistry/schemaRegistries",
+      "apiVersion": "2024-09-01-preview",
+      "name": "[variables('aioSchemaRegistryName')]",
+      "location": "[resourceGroup().location]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "namespace": "[variables('aioSchemaRegistryNamespace')]",
+        "storageAccountContainerUrl": "[concat('https://', variables('aioStorageAccountName'), '.blob.core.windows.net/schemas')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('aioStorageAccountName'))]",
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', variables('aioStorageAccountName'), 'default', 'schemas')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Fabric/capacities",
+      "apiVersion": "2023-11-01",
+      "condition": "[parameters('deployFabricCapacity')]",
+      "name": "[variables('fabricCapacityName')]",
+      "location": "[resourceGroup().location]",
+      "sku": {
+        "name": "F2",
+        "tier": "Fabric"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity'))]",
+        "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceGroup().id, resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity')), variables('contributorRoleId')))]"
+      ],
+      "properties": {
+        "administration": {
+          "members": "[createArray(reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity')), '2018-11-30').principalId)]"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.EventHub/namespaces/eventhubs/consumergroups",
+      "apiVersion": "2021-11-01",
+      "condition": "[parameters('deployDatabricks')]",
+      "name": "[format('{0}/{1}/{2}', concat(variables('resourcesName'), '-EventHubs'), 'data', 'databricks')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces/eventhubs', concat(variables('resourcesName'), '-EventHubs'), 'data')]"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "Microsoft.EventHub/namespaces/eventhubs/consumergroups",
+      "apiVersion": "2021-11-01",
+      "condition": "[parameters('deployDatabricks')]",
+      "name": "[format('{0}/{1}/{2}', concat(variables('resourcesName'), '-EventHubs'), 'metadata', 'databricks')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces/eventhubs', concat(variables('resourcesName'), '-EventHubs'), 'metadata')]"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "Microsoft.EventHub/namespaces/eventhubs/consumergroups",
+      "apiVersion": "2021-11-01",
+      "name": "[format('{0}/{1}/{2}', concat(variables('resourcesName'), '-EventHubs'), 'data', 'fabric')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces/eventhubs', concat(variables('resourcesName'), '-EventHubs'), 'data')]"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "Microsoft.EventHub/namespaces/eventhubs/consumergroups",
+      "apiVersion": "2021-11-01",
+      "name": "[format('{0}/{1}/{2}', concat(variables('resourcesName'), '-EventHubs'), 'metadata', 'fabric')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces/eventhubs', concat(variables('resourcesName'), '-EventHubs'), 'metadata')]"
+      ],
+      "properties": {}
+    },
+    {
+      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+      "name": "[concat(variables('resourcesName'), '-Identity')]",
+      "apiVersion": "2018-11-30",
+      "location": "[resourceGroup().location]"
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2020-10-01-preview",
+      "name": "[guid(resourceGroup().id, resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity')), variables('contributorRoleId'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity'))]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[variables('contributorRoleId')]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity')), '2018-11-30').principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2020-10-01-preview",
+      "name": "[guid(variables('keyVaultSecretsUserId'), resourceGroup().id)]",
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity'))]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[variables('keyVaultSecretsUserId')]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity')), '2018-11-30').principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2020-10-01-preview",
+      "name": "[guid(variables('keyVaultSecretsOfficerId'), resourceGroup().id)]",
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity'))]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[variables('keyVaultSecretsOfficerId')]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity')), '2018-11-30').principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2020-10-01-preview",
+      "name": "[guid(resourceGroup().id, resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity')), variables('keyVaultReaderId'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity'))]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[variables('keyVaultReaderId')]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity')), '2018-11-30').principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
+      "type": "Microsoft.Kusto/clusters/databases/principalAssignments",
+      "apiVersion": "2021-01-01",
+      "name": "[format('{0}/{1}/{2}', variables('adxClusterName'), 'ontologies', guid(resourceId('Microsoft.Kusto/clusters/databases', split(format('{0}/{1}', variables('adxClusterName'), 'ontologies'), '/')[0], split(format('{0}/{1}', variables('adxClusterName'), 'ontologies'), '/')[1]), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity')), 'Admin'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Kusto/clusters/databases/scripts', variables('adxClusterName'), 'ontologies', 'OEE-calculation-script')]"
+      ],
+      "properties": {
+        "principalId": "[reference(concat(variables('resourcesName'), '-Identity')).principalId]",
+        "role": "Admin",
+        "tenantId": "[reference(concat(variables('resourcesName'), '-Identity')).tenantId]",
+        "principalType": "App"
+      }
+    },
+    {
+      "type": "Microsoft.Databricks/workspaces",
+      "apiVersion": "2024-05-01",
+      "condition": "[parameters('deployDatabricks')]",
+      "name": "[variables('databricksWorkspaceName')]",
+      "location": "[resourceGroup().location]",
+      "sku": {
+        "name": "premium"
+      },
+      "properties": {
+        "managedResourceGroupId": "[variables('databricksManagedResourceGroupId')]",
+        "publicNetworkAccess": "Enabled"
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deploymentScripts",
+      "apiVersion": "2020-10-01",
+      "condition": "[parameters('deployDatabricks')]",
+      "name": "[concat(variables('resourcesName'), '-DatabricksSetup')]",
+      "location": "[resourceGroup().location]",
+      "kind": "AzureCLI",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity'))]": {}
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Databricks/workspaces', variables('databricksWorkspaceName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity'))]",
+        "[resourceId('Microsoft.EventHub/namespaces', concat(variables('resourcesName'), '-EventHubs'))]",
+        "[resourceId('Microsoft.EventHub/namespaces/eventhubs/consumergroups', concat(variables('resourcesName'), '-EventHubs'), 'data', 'databricks')]",
+        "[resourceId('Microsoft.EventHub/namespaces/eventhubs/consumergroups', concat(variables('resourcesName'), '-EventHubs'), 'metadata', 'databricks')]",
+        "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceGroup().id, resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity')), variables('contributorRoleId')))]"
+      ],
+      "properties": {
+        "azCliVersion": "2.61.0",
+        "timeout": "PT45M",
+        "retentionInterval": "P1D",
+        "cleanupPreference": "OnSuccess",
+        "primaryScriptUri": "[variables('databricksSetupScriptUri')]",
+        "environmentVariables": [
+          {
+            "name": "DATABRICKS_WORKSPACE_URL",
+            "value": "[reference(resourceId('Microsoft.Databricks/workspaces', variables('databricksWorkspaceName')), '2024-05-01').workspaceUrl]"
+          },
+          {
+            "name": "WORKSPACE_RESOURCE_ID",
+            "value": "[resourceId('Microsoft.Databricks/workspaces', variables('databricksWorkspaceName'))]"
+          },
+          {
+            "name": "MANAGED_IDENTITY_CLIENT_ID",
+            "value": "[reference(concat(variables('resourcesName'), '-Identity')).clientId]"
+          },
+          {
+            "name": "NOTEBOOK_URL",
+            "value": "[variables('databricksNotebookUri')]"
+          },
+          {
+            "name": "DASHBOARD_URL",
+            "value": "[variables('databricksDashboardUri')]"
+          },
+          {
+            "name": "EVENTHUBS_CONNECTION_STRING",
+            "secureValue": "[listkeys(variables('authRuleResourceId'), '2015-08-01').primaryConnectionString]"
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2024-03-01",
+      "name": "[variables('i3xContainerAppName')]",
+      "location": "[resourceGroup().location]",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity'))]": {}
+        }
+      },
+      "properties": {
+        "workloadProfileName": "Consumption",
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', concat(variables('resourcesName'), '-AppEnvironment'))]",
+        "configuration": {
+          "activeRevisionsMode": "Single",
+          "secrets": [
+            {
+              "name": "i3xbasicauthpassword",
+              "value": "[parameters('adminPassword')]"
+            }
+          ],
+          "ingress": {
+            "external": true,
+            "transport": "Auto",
+            "targetPort": 8080,
+            "allowInsecure": false,
+            "traffic": [
+              {
+                "latestRevision": true,
+                "weight": 100
+              }
+            ]
+          }
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "i3x4kusto",
+              "image": "ghcr.io/azure-samples/i3x4kusto:main",
+              "env": [
+                {
+                  "name": "ADX_HOST",
+                  "value": "[reference(resourceId('Microsoft.Kusto/clusters', variables('adxClusterName')), '2021-01-01').uri]"
+                },
+                {
+                  "name": "ADX_DB",
+                  "value": "ontologies"
+                },
+                {
+                  "name": "ADX_APPLICATION_ID",
+                  "value": "[reference(concat(variables('resourcesName'), '-Identity')).clientId]"
+                },
+                {
+                  "name": "AZURE_TENANT_ID",
+                  "value": "[subscription().tenantId]"
+                },
+                {
+                  "name": "I3X_BASIC_AUTH_USERNAME",
+                  "value": "[parameters('adminUsername')]"
+                },
+                {
+                  "name": "I3X_BASIC_AUTH_PASSWORD",
+                  "secretRef": "i3xbasicauthpassword"
+                }
+              ],
+              "resources": {
+                "cpu": 0.5,
+                "memory": "1Gi"
+              }
+            }
+          ],
+          "scale": {
+            "minReplicas": 1,
+            "maxReplicas": 1
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.App/managedEnvironments', concat(variables('resourcesName'), '-AppEnvironment'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity'))]",
+        "[resourceId('Microsoft.Kusto/clusters', variables('adxClusterName'))]",
+        "[resourceId('Microsoft.Kusto/clusters/databases/principalAssignments', variables('adxClusterName'), 'ontologies', guid(resourceId('Microsoft.Kusto/clusters/databases', variables('adxClusterName'), 'ontologies'), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity')), 'Admin'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2024-03-01",
+      "name": "[variables('plantCopilotContainerAppName')]",
+      "location": "[resourceGroup().location]",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity'))]": {}
+        }
+      },
+      "properties": {
+        "workloadProfileName": "Consumption",
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', concat(variables('resourcesName'), '-AppEnvironment'))]",
+        "configuration": {
+          "activeRevisionsMode": "Single",
+          "secrets": [
+            {
+              "name": "i3xbasicauthpassword",
+              "value": "[parameters('adminPassword')]"
+            }
+          ],
+          "ingress": {
+            "external": true,
+            "transport": "Auto",
+            "targetPort": 8080,
+            "allowInsecure": false,
+            "traffic": [
+              {
+                "latestRevision": true,
+                "weight": 100
+              }
+            ]
+          }
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "plantcopilot",
+              "image": "ghcr.io/digitaltwinconsortium/manufacturingontologies/plantcopilot:main",
+              "env": [
+                {
+                  "name": "I3X_BASE_URL",
+                  "value": "[concat('https://', reference(resourceId('Microsoft.App/containerApps', variables('i3xContainerAppName')), '2024-03-01').configuration.ingress.fqdn)]"
+                },
+                {
+                  "name": "I3X_USERNAME",
+                  "value": "[parameters('adminUsername')]"
+                },
+                {
+                  "name": "I3X_PASSWORD",
+                  "secretRef": "i3xbasicauthpassword"
+                },
+                {
+                  "name": "AUTH_BASIC_USERNAME",
+                  "value": "[parameters('adminUsername')]"
+                },
+                {
+                  "name": "AUTH_BASIC_PASSWORD",
+                  "secretRef": "i3xbasicauthpassword"
+                }
+              ],
+              "resources": {
+                "cpu": 0.5,
+                "memory": "1Gi"
+              }
+            }
+          ],
+          "scale": {
+            "minReplicas": 1,
+            "maxReplicas": 1
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.App/managedEnvironments', concat(variables('resourcesName'), '-AppEnvironment'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', concat(variables('resourcesName'), '-Identity'))]",
+        "[resourceId('Microsoft.App/containerApps', variables('i3xContainerAppName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "i3x4KustoUrl": {
+      "type": "string",
+      "value": "[concat('https://', reference(resourceId('Microsoft.App/containerApps', variables('i3xContainerAppName')), '2024-03-01').configuration.ingress.fqdn)]"
+    },
+    "plantCopilotMcpUrl": {
+      "type": "string",
+      "value": "[concat('https://', reference(resourceId('Microsoft.App/containerApps', variables('plantCopilotContainerAppName')), '2024-03-01').configuration.ingress.fqdn, '/mcp')]"
+    }
+  }
+}

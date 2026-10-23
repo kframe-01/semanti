@@ -1,0 +1,52 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 18
+VisualStudioVersion = 18.1.11312.151
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Station", "Station.csproj", "{6D8661D6-F520-4D42-AC50-C71E8551F0F0}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{A2784944-F23E-4528-B46F-4D258835BABA}"
+	ProjectSection(SolutionItems) = preProject
+		..\..\..\Deployment\arm.json = ..\..\..\Deployment\arm.json
+		..\..\..\Deployment\Bootstrap.sh = ..\..\..\Deployment\Bootstrap.sh
+		..\..\ADXQueries\CalculateOEEForLine.kql = ..\..\ADXQueries\CalculateOEEForLine.kql
+		..\..\ADXQueries\CalculateOEEForStation.kql = ..\..\ADXQueries\CalculateOEEForStation.kql
+		..\..\..\comparison.md = ..\..\..\comparison.md
+		..\..\ADXQueries\dashboard-ontologies.json = ..\..\ADXQueries\dashboard-ontologies.json
+		..\..\..\.github\workflows\docker-publish.yml = ..\..\..\.github\workflows\docker-publish.yml
+		..\..\..\Deployment\fabric.json = ..\..\..\Deployment\fabric.json
+		..\..\..\LICENSE = ..\..\..\LICENSE
+		..\..\DatabricksQueries\opcua_setup.py = ..\..\DatabricksQueries\opcua_setup.py
+		..\..\..\README.md = ..\..\..\README.md
+		..\..\GrafanaDashboard\samplegrafanadashboard.json = ..\..\GrafanaDashboard\samplegrafanadashboard.json
+		..\..\..\Deployment\SetupAzureIoTOperations.sh = ..\..\..\Deployment\SetupAzureIoTOperations.sh
+		..\..\..\Deployment\SetupDatabricks.sh = ..\..\..\Deployment\SetupDatabricks.sh
+		..\..\..\Deployment\SetupFabric.sh = ..\..\..\Deployment\SetupFabric.sh
+		..\StartSimulation.sh = ..\StartSimulation.sh
+		..\StopSimulation.sh = ..\StopSimulation.sh
+	EndProjectSection
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PlantCopilot", "..\..\PlantCopilot\PlantCopilot.csproj", "{45C13E42-CC83-AA6E-30A5-FE495C45FE86}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{6D8661D6-F520-4D42-AC50-C71E8551F0F0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6D8661D6-F520-4D42-AC50-C71E8551F0F0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6D8661D6-F520-4D42-AC50-C71E8551F0F0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6D8661D6-F520-4D42-AC50-C71E8551F0F0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{45C13E42-CC83-AA6E-30A5-FE495C45FE86}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{45C13E42-CC83-AA6E-30A5-FE495C45FE86}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{45C13E42-CC83-AA6E-30A5-FE495C45FE86}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{45C13E42-CC83-AA6E-30A5-FE495C45FE86}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {75DE4D6A-A9A0-431F-8D68-A974296BBFDF}
+	EndGlobalSection
+EndGlobal

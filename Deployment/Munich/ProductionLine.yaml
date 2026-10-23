@@ -1,0 +1,454 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: munich
+spec:
+  finalizers:
+  - kubernetes
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: commander
+  namespace: munich
+spec:
+  # Scaled to zero: UA Cloud Commander is kept in the config as a dormant backup but not run. Commands now
+  # flow via the in-cluster 'ua-cloud-action' Deployment below, which publishes an MQTT-RPC request directly
+  # to the AIO OPC UA connector commander. Set replicas back to 1 to re-enable UA Cloud Commander instead.
+  replicas: 0
+  selector:
+    matchLabels:
+      app: commander
+  template:
+    metadata:
+      labels:
+        app: commander
+    spec:
+      nodeSelector:
+        "kubernetes.io/os": linux
+      containers:
+      - name: commander
+        image: ghcr.io/opcfoundation/ua-cloudcommander:main
+        imagePullPolicy: Always
+        env:
+        - name: APPNAME
+          value: "commander.munich"
+        - name: USE_KAFKA
+          value: "1"
+        - name: BROKERNAME
+          value: "myeventhubsnamespace.servicebus.windows.net"
+        - name: CLIENTNAME
+          value: "commander.munich"
+        - name: TOPIC
+          value: "commander.command"
+        - name: RESPONSE_TOPIC
+          value: "commander.response"
+        - name: USERNAME
+          value: "$ConnectionString"
+        - name: PASSWORD
+          value: "myeventhubsnamespaceprimarykeyconnectionstring"
+        - name: OPCUA_USERNAME
+          value: "myUsername"
+        - name: OPCUA_PASSWORD
+          value: "myPassword"
+        ports:
+        - containerPort: 4840
+          name: opcua
+        volumeMounts:
+        - name: "logs"
+          mountPath: "/app/logs"
+        - name: "pki"
+          mountPath: "/app/pki"
+      volumes:
+        - name: "logs"
+          hostPath:
+            path: "/mnt/c/K3s/Commander/Munich/Logs"
+        - name: "pki"
+          hostPath:
+            path: "/mnt/c/K3s/Commander/Munich/PKI"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: commander
+  namespace: munich
+spec:
+  ports:
+  - targetPort: 4840
+    port: 4840
+  selector:
+    app: commander
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ua-cloud-action
+  namespace: munich
+  annotations:
+    # Microsoft Entra Workload Identity: federates this service account with the shared user-assigned
+    # managed identity (which has ADX access) so UA-CloudAction queries ADX with a federated token and no
+    # secret. StartSimulation.sh substitutes the managed identity's client id; SetupAzureIoTOperations.sh
+    # creates the federated credential and enables the OIDC issuer/workload identity on the Arc cluster.
+    azure.workload.identity/client-id: "myManagedIdentityClientId"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ua-cloud-action
+  namespace: munich
+spec:
+  # UA-CloudAction runs on the edge (inside the K3s cluster where AIO runs) so it can reach the local AIO
+  # MQTT broker directly. It queries ADX for high pressure, then publishes an MQTT v5 RPC request to the
+  # built-in OPC UA connector commander's action topic (MESSAGING_PLATFORM=MQTT). Client auth to the broker
+  # uses the in-cluster Kubernetes Service Account Token (K8S-SAT); the CA bundle is only for TLS server
+  # validation. ADX access uses Microsoft Entra Workload Identity (see the service account annotation and the
+  # 'azure.workload.identity/use' pod label); the APPLICATION_ID/KEY/AAD_TENANT_ID env vars below are only a
+  # fallback when workload identity is not enabled.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ua-cloud-action
+  template:
+    metadata:
+      labels:
+        app: ua-cloud-action
+        # Required so the Arc workload-identity webhook projects the federated token into the pod.
+        azure.workload.identity/use: "true"
+    spec:
+      # Dedicated ServiceAccount so the AIO broker's BrokerAuthentication SAT rule can admit this client
+      # (and so the projected 'aio-internal'-audience token identifies UA-CloudAction, not the default SA).
+      serviceAccountName: ua-cloud-action
+      nodeSelector:
+        "kubernetes.io/os": linux
+      containers:
+      - name: ua-cloud-action
+        image: ghcr.io/opcfoundation/ua-cloudaction:main
+        imagePullPolicy: Always
+        env:
+        # --- transport: publish the OPC UA method call directly to the local AIO MQTT broker ---
+        - name: MESSAGING_PLATFORM
+          value: "MQTT"
+        - name: MQTT_TARGET
+          value: "AIOCommander"
+        - name: BROKER_NAME
+          value: "aio-broker.azure-iot-operations"
+        - name: MQTT_PORT
+          value: "18883"
+        - name: MQTT_USE_TLS
+          value: "true"
+        # CA bundle: validates the broker's TLS server certificate (encryption/identity of the broker).
+        - name: MQTT_CA_FILE
+          value: "/var/run/certs/ca.crt"
+        # Client authentication: the AIO broker's default listener accepts the Kubernetes Service Account
+        # Token (K8S-SAT). UA-CloudAction sends this projected token; no username/password is needed.
+        - name: MQTT_SAT_TOKEN_FILE
+          value: "/var/run/secrets/tokens/broker-sat"
+        - name: TOPIC
+          value: "azure-iot-operations/asset-operations/assembly-munich-asset/managementGroup/OpenPressureReliefValve"
+        - name: RESPONSE_TOPIC
+          value: "azure-iot-operations/asset-operations/assembly-munich-asset/managementGroup/OpenPressureReliefValve/response"
+        # --- ADX access for the high-pressure query (authenticated via workload identity above) ---
+        - name: ADX_INSTANCE_URL
+          value: "https://myadxcluster.myregion.kusto.windows.net"
+        - name: ADX_DB_NAME
+          value: "ontologies"
+        - name: ADX_TABLE_NAME
+          value: "opcua_telemetry"
+        # Service-principal fallback (used only if workload identity is not enabled). Leave empty to rely on
+        # workload identity; to use a service principal instead, set all three to real values.
+        - name: AAD_TENANT_ID
+          value: ""
+        - name: APPLICATION_ID
+          value: ""
+        - name: APPLICATION_KEY
+          value: ""
+        # --- OPC UA target (assembly.munich pressure-relief method) ---
+        - name: UA_SERVER_ENDPOINT
+          value: "opc.tcp://assembly.munich/"
+        - name: UA_SERVER_METHOD_ID
+          value: "ns=2;i=435"
+        - name: UA_SERVER_OBJECT_ID
+          value: "ns=2;i=424"
+        - name: UA_SERVER_APPLICATION_NAME
+          value: "assembly"
+        - name: UA_SERVER_LOCATION_NAME
+          value: "munich"
+        volumeMounts:
+        - name: "aio-ca"
+          mountPath: "/var/run/certs"
+          readOnly: true
+        - name: "broker-sat"
+          mountPath: "/var/run/secrets/tokens"
+          readOnly: true
+      volumes:
+        # AIO broker trust bundle so UA-CloudAction can validate the MQTT broker's TLS certificate.
+        # NOTE: this configMap is created by AIO in the 'azure-iot-operations' namespace and is namespace-
+        # scoped, so it must be COPIED into this namespace, e.g.:
+        #   kubectl get configmap azure-iot-operations-aio-ca-trust-bundle -n azure-iot-operations -o yaml \
+        #     | sed 's/namespace: azure-iot-operations/namespace: munich/' | kubectl apply -f -
+        # 'optional: true' prevents a missing configMap from wedging the pod in ContainerCreating; if the CA
+        # is absent, set MQTT_TLS_INSECURE=true above (test only) so TLS validation is skipped.
+        - name: "aio-ca"
+          configMap:
+            name: azure-iot-operations-aio-ca-trust-bundle
+            optional: true
+            items:
+            - key: ca.crt
+              path: ca.crt
+        # Projected Kubernetes Service Account Token used to authenticate to the AIO MQTT broker (K8S-SAT).
+        # 'audience' must match the AIO BrokerAuthentication SAT audience (AIO default: aio-internal).
+        - name: "broker-sat"
+          projected:
+            sources:
+            - serviceAccountToken:
+                path: broker-sat
+                audience: aio-internal
+                expirationSeconds: 3600
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mes
+  namespace: munich
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mes
+  template:
+    metadata:
+      labels:
+        app: mes
+    spec:
+      nodeSelector:
+        "kubernetes.io/os": linux
+      containers:
+      - name: mes
+        image: ghcr.io/digitaltwinconsortium/manufacturingontologies:main
+        imagePullPolicy: Always
+        env:
+        - name: StationType
+          value: "mes"
+        - name: StationURI
+          value: "opc.tcp://mes.munich/"
+        - name: FactoryTimeZone
+          value: "Europe/Berlin"
+        - name: ProductionLineName
+          value: "munich"
+        - name: OPCUA_USERNAME
+          value: "myUsername"
+        - name: OPCUA_PASSWORD
+          value: "myPassword"
+        ports:
+        - containerPort: 4840
+          name: opcua
+        volumeMounts:
+        - name: "logs"
+          mountPath: "/app/logs"
+        - name: "pki"
+          mountPath: "/app/pki"
+      volumes:
+        - name: "logs"
+          hostPath:
+            path: "/mnt/c/K3s/MES/Munich/Logs"
+        - name: "pki"
+          hostPath:
+            path: "/mnt/c/K3s/MES/Munich/PKI"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mes
+  namespace: munich
+spec:
+  ports:
+  - targetPort: 4840
+    port: 4840
+  selector:
+    app: mes
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: assembly
+  namespace: munich
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: assembly
+  template:
+    metadata:
+      labels:
+        app: assembly
+    spec:
+      nodeSelector:
+        "kubernetes.io/os": linux
+      containers:
+      - name: assembly
+        image: ghcr.io/digitaltwinconsortium/manufacturingontologies:main
+        imagePullPolicy: Always
+        env:
+        - name: StationType
+          value: "assembly"
+        - name: StationURI
+          value: "opc.tcp://assembly.munich/"
+        - name: PowerConsumption
+          value: "200"
+        - name: CycleTime
+          value: "6"
+        - name: OPCUA_USERNAME
+          value: "myUsername"
+        - name: OPCUA_PASSWORD
+          value: "myPassword"
+        ports:
+        - containerPort: 4840
+          name: opcua
+        volumeMounts:
+        - name: "logs"
+          mountPath: "/app/logs"
+        - name: "pki"
+          mountPath: "/app/pki"
+      volumes:
+        - name: "logs"
+          hostPath:
+            path: "/mnt/c/K3s/Assembly/Munich/Logs"
+        - name: "pki"
+          hostPath:
+            path: "/mnt/c/K3s/Assembly/Munich/PKI"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: assembly
+  namespace: munich
+spec:
+  ports:
+  - targetPort: 4840
+    port: 4840
+  selector:
+    app: assembly
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test
+  namespace: munich
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test
+  template:
+    metadata:
+      labels:
+        app: test
+    spec:
+      nodeSelector:
+        "kubernetes.io/os": linux
+      containers:
+      - name: test
+        image: ghcr.io/digitaltwinconsortium/manufacturingontologies:main
+        imagePullPolicy: Always
+        env:
+        - name: StationType
+          value: "test"
+        - name: StationURI
+          value: "opc.tcp://test.munich/"
+        - name: PowerConsumption
+          value: "100"
+        - name: CycleTime
+          value: "6"
+        - name: OPCUA_USERNAME
+          value: "myUsername"
+        - name: OPCUA_PASSWORD
+          value: "myPassword"
+        ports:
+        - containerPort: 4840
+          name: opcua
+        volumeMounts:
+        - name: "logs"
+          mountPath: "/app/logs"
+        - name: "pki"
+          mountPath: "/app/pki"
+      volumes:
+        - name: "logs"
+          hostPath:
+            path: "/mnt/c/K3s/Test/Munich/Logs"
+        - name: "pki"
+          hostPath:
+            path: "/mnt/c/K3s/Test/Munich/PKI"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: test
+  namespace: munich
+spec:
+  ports:
+  - targetPort: 4840
+    port: 4840
+  selector:
+    app: test
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: packaging
+  namespace: munich
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: packaging
+  template:
+    metadata:
+      labels:
+        app: packaging
+    spec:
+      nodeSelector:
+        "kubernetes.io/os": linux
+      containers:
+      - name: packaging
+        image: ghcr.io/digitaltwinconsortium/manufacturingontologies:main
+        imagePullPolicy: Always
+        env:
+        - name: StationType
+          value: "packaging"
+        - name: StationURI
+          value: "opc.tcp://packaging.munich/"
+        - name: PowerConsumption
+          value: "100"
+        - name: CycleTime
+          value: "6"
+        - name: OPCUA_USERNAME
+          value: "myUsername"
+        - name: OPCUA_PASSWORD
+          value: "myPassword"
+        ports:
+        - containerPort: 4840
+          name: opcua
+        volumeMounts:
+        - name: "logs"
+          mountPath: "/app/logs"
+        - name: "pki"
+          mountPath: "/app/pki"
+      volumes:
+        - name: "logs"
+          hostPath:
+            path: "/mnt/c/K3s/Packaging/Munich/Logs"
+        - name: "pki"
+          hostPath:
+            path: "/mnt/c/K3s/Packaging/Munich/PKI"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: packaging
+  namespace: munich
+spec:
+  ports:
+  - targetPort: 4840
+    port: 4840
+  selector:
+    app: packaging

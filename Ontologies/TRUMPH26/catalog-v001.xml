@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<catalog prefer="public" xmlns="urn:oasis:names:tc:entity:xmlns:xml:catalog">
+    <uri id="User Entered Import Resolution" name="https://spec.industrialontologies.org/ontology/supplychain/SupplyChain/" uri="file:/C:/Users/koubaaan/project/ManufacturingOntologies-main/Ontologies/IOF26/ontology-master/supplychain/SupplyChain.rdf"/>
+    <uri id="User Entered Import Resolution" name="https://spec.industrialontologies.org/ontology/core/meta/AnnotationVocabulary/" uri="file:/C:/Users/koubaaan/project/ManufacturingOntologies-main/Ontologies/IOF26/ontology-master/core/meta/AnnotationVocabulary.rdf"/>
+    <uri id="User Entered Import Resolution" name="http://purl.obolibrary.org/obo/bfo/2020/bfo.owl" uri="file:/C:/Users/koubaaan/project/ManufacturingOntologies-main/Ontologies/BFO20/bfo.owl"/>
+    <uri id="User Entered Import Resolution" name="https://spec.industrialontologies.org/ontology/core/Core/" uri="file:/C:/Users/koubaaan/project/ManufacturingOntologies-main/Ontologies/IOF26/ontology-master/core/Core.rdf"/>
+    <uri id="User Entered Import Resolution" name="http://www.w3.org/ns/ssn/" uri="file:/C:/Users/koubaaan/project/ManufacturingOntologies-main/Ontologies/IOF26/ontology-master/productservicesystem/Sensor.rdf"/>
+    <uri id="User Entered Import Resolution" name="http://purl.obolibrary.org/obo/bfo.owl" uri="file:/C:/Users/koubaaan/project/ManufacturingOntologies-main/Ontologies/BFO20/bfo.owl"/>
+    <group id="Folder Repository, directory=, recursive=true, Auto-Update=true, version=2" prefer="public">
+        <uri id="Automatically generated entry, Timestamp=1789966605441" name="http://www.trumpf.com/ontologies/visa-measurement" uri="main.xml"/>
+    </group>
+</catalog>
